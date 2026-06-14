@@ -162,8 +162,16 @@ async function newThread(deps: RouterDeps, ctx: WechatContext, tail: string): Pr
 
 async function createAndContinueThread(deps: RouterDeps, ctx: WechatContext, project: ProjectConfig, prompt: string): Promise<void> {
   const threadId = await deps.codex.startThread(project.path);
-  deps.state.patchChat(ctx.senderId, { currentProject: project.alias, currentThread: threadId, pendingNewProject: undefined });
-  await continueThread(deps, ctx, project, threadId, prompt);
+  try {
+    await continueThread(deps, ctx, project, threadId, prompt, { resumeFirst: false });
+  } catch (error) {
+    if (isMissingRolloutError(error)) {
+      deps.state.patchChat(ctx.senderId, { currentProject: project.alias, currentThread: undefined, pendingNewProject: undefined });
+      await replyMissingRollout(deps, ctx, threadId, error, project);
+      return;
+    }
+    throw error;
+  }
 }
 
 async function listThreads(deps: RouterDeps, ctx: WechatContext, alias?: string): Promise<void> {
@@ -234,11 +242,18 @@ async function continueResolvedThread(deps: RouterDeps, ctx: WechatContext, targ
   }
 }
 
-async function continueThread(deps: RouterDeps, ctx: WechatContext, project: ProjectConfig | undefined, threadId: string, prompt: string): Promise<void> {
+async function continueThread(
+  deps: RouterDeps,
+  ctx: WechatContext,
+  project: ProjectConfig | undefined,
+  threadId: string,
+  prompt: string,
+  options: { resumeFirst?: boolean } = {},
+): Promise<void> {
   const progress = startWechatProgress(deps, ctx);
   let result;
   try {
-    await deps.codex.resumeThread(threadId, project?.path);
+    if (options.resumeFirst !== false) await deps.codex.resumeThread(threadId, project?.path);
     deps.state.recordSelfTurn(threadId, prompt);
     result = await deps.codex.runTurn({
       threadId,
@@ -325,7 +340,7 @@ function isMissingRolloutError(error: unknown): boolean {
   return /no rollout found for thread id/i.test(errorText(error));
 }
 
-async function replyMissingRollout(deps: RouterDeps, ctx: WechatContext, attemptedThreadId: string, error: unknown): Promise<void> {
+async function replyMissingRollout(deps: RouterDeps, ctx: WechatContext, attemptedThreadId: string, error: unknown, newThreadProject?: ProjectConfig): Promise<void> {
   const text = errorText(error);
   const missingThreadId = text.match(/no rollout found for thread id ([0-9a-f-]+)/i)?.[1] || attemptedThreadId;
   const chat = deps.state.getChat(ctx.senderId);
@@ -336,6 +351,14 @@ async function replyMissingRollout(deps: RouterDeps, ctx: WechatContext, attempt
   const retryHint = lastNotice
     ? `最近可用通知是 ${lastNotice.id}，请发送：/r ${lastNotice.id} <问题>，或直接引用那条完成通知回复。`
     : "请引用一条 Codex 完成通知回复；如果是新任务，请使用 /new <项目别名> <问题>。";
+  if (newThreadProject) {
+    await reply(
+      deps,
+      ctx,
+      `新建 Codex thread 首轮启动失败，当前 app-server 找不到刚创建的 rollout（${shortThreadId(missingThreadId)}），本次没有继续执行。请重试：/new ${newThreadProject.alias} <问题>。`,
+    );
+    return;
+  }
   await reply(
     deps,
     ctx,

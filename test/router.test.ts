@@ -369,6 +369,64 @@ describe("referenced notification routing", () => {
     state.close();
     removeStateDbForTests(db);
   });
+
+  it("does not keep a new thread binding when the first /new turn has no rollout", async () => {
+    const db = tempDb("router-new-missing-rollout");
+    removeStateDbForTests(db);
+    const state = new StateStore(db);
+    state.addAllowed("u@im.wechat", "tester", true);
+    state.patchChat("u@im.wechat", {
+      currentProject: "WeChat-Codex",
+      pendingNewProject: "WeChat-Codex",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ret: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const codex = {
+      startThread: vi.fn(async () => "new-thread"),
+      resumeThread: vi.fn(),
+      runTurn: vi.fn(async () => {
+        throw new Error(JSON.stringify({ code: -32600, message: "no rollout found for thread id new-thread" }));
+      }),
+      transportStatus: () => ({ configuredMode: "auto", modeUsed: "spawn", liveDesktopUpdates: false, reason: "test" }),
+    } as unknown as RouterDeps["codex"];
+    const config = {
+      ...defaultConfig(),
+      wechatProgress: { typingEnabled: false, typingKeepaliveMs: 5000, heartbeatAfterMs: 0 },
+      projects: [{ alias: "WeChat-Codex", path: "/Users/qqk/Documents/Wechat-Codex" }],
+    };
+
+    await handleWechatText(
+      { config, account: testAccount(), state, codex },
+      {
+        senderId: "u@im.wechat",
+        contextToken: "ctx",
+        text: "开始一个新任务",
+        message: {
+          from_user_id: "u@im.wechat",
+          context_token: "ctx",
+          message_type: 1,
+          item_list: [{ type: 1, text_item: { text: "开始一个新任务" } }],
+        },
+      },
+    );
+
+    expect(codex.startThread).toHaveBeenCalledWith("/Users/qqk/Documents/Wechat-Codex");
+    expect(codex.resumeThread).not.toHaveBeenCalled();
+    expect(codex.runTurn).toHaveBeenCalledWith(expect.objectContaining({ threadId: "new-thread" }));
+    const payload = JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body));
+    expect(payload.msg.item_list[0].text_item.text).toContain("新建 Codex thread 首轮启动失败");
+    expect(payload.msg.item_list[0].text_item.text).toContain("/new WeChat-Codex <问题>");
+    expect(state.getChat("u@im.wechat").currentThread).toBeUndefined();
+    expect(state.getChat("u@im.wechat").pendingNewProject).toBeUndefined();
+    expect(state.getChat("u@im.wechat").currentProject).toBe("WeChat-Codex");
+
+    state.close();
+    removeStateDbForTests(db);
+  });
 });
 
 describe("approval reply classification", () => {
