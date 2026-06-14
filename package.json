@@ -1,0 +1,39 @@
+{
+  "name": "wechat-codex-assistant",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "SECURITY.md"
+  ],
+  "bin": {
+    "wechat-codex": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "ci": "npm run typecheck && npm test && npm run build",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js start",
+    "doctor": "node dist/cli.js doctor",
+    "schema:check": "codex app-server generate-ts --out /tmp/wechat-codex-app-schema",
+    "scan:secrets": "node scripts/secret-scan.mjs",
+    "release:check": "npm run ci && npm run schema:check && npm run scan:secrets"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.14"
+  }
+}
