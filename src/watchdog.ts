@@ -96,7 +96,7 @@ export function runWatchdog(): WatchdogRunResult {
   let daemonServiceLoaded = daemonService.loaded;
   if (!daemonService.loaded) {
     issues.push("daemon service is not loaded");
-    notifyLocalIssue("daemon-not-loaded", "WeChat Codex", "后台服务未运行", "已检测到 WeChat-Codex daemon 没有 loaded，正在尝试自动拉起。");
+    notifyLocalIssue("daemon-not-loaded", "Codex Beeper", "后台服务未运行", "已检测到 Codex Beeper daemon 没有 loaded，正在尝试自动拉起。");
     const installed = installLaunchdService(DAEMON_LABEL);
     actions.push(`service install: ${installed.loaded ? "loaded" : installed.detail}`);
     daemonServiceLoaded = installed.loaded;
@@ -108,7 +108,7 @@ export function runWatchdog(): WatchdogRunResult {
   const age = heartbeatAgeMs(checkedAt, heartbeat);
   if (!heartbeat || age == null || age > HEARTBEAT_STALE_MS) {
     issues.push("daemon heartbeat is stale");
-    notifyLocalIssue("daemon-heartbeat-stale", "WeChat Codex", "daemon 心跳异常", "WeChat-Codex daemon 心跳已超时，正在尝试重启后台服务。");
+    notifyLocalIssue("daemon-heartbeat-stale", "Codex Beeper", "daemon 心跳异常", "Codex Beeper daemon 心跳已超时，正在尝试重启后台服务。");
     if (daemonServiceLoaded) {
       const kicked = kickstartLaunchdService(DAEMON_LABEL);
       actions.push(`service kickstart: ${kicked.ok ? "ok" : kicked.detail}`);
@@ -120,7 +120,7 @@ export function runWatchdog(): WatchdogRunResult {
   const hook = hookStatus();
   if (!hook.installed || hook.hooksFeature !== "enabled") {
     issues.push("Stop hook is not installed or enabled");
-    notifyLocalIssue("hook-not-ready", "WeChat Codex", "Stop hook 未就绪", "Codex Stop hook 未安装或 hooks feature 未启用，Desktop 完成通知不会进入微信。");
+    notifyLocalIssue("hook-not-ready", "Codex Beeper", "Stop hook 未就绪", "Codex Stop hook 未安装或 hooks feature 未启用，Desktop 完成通知不会进入微信。");
   } else {
     clearLocalIssueNotification("hook-not-ready");
   }
@@ -128,7 +128,7 @@ export function runWatchdog(): WatchdogRunResult {
   const desktop = desktopHookReadiness();
   if (desktop.status !== "ready") {
     issues.push(`desktop hook readiness: ${desktop.status}`);
-    notifyLocalIssue("desktop-hook-not-ready", "WeChat Codex", "Desktop hook 未就绪", `Codex Desktop hook 状态是 ${desktop.status}。${desktop.reason}`);
+    notifyLocalIssue("desktop-hook-not-ready", "Codex Beeper", "Desktop hook 未就绪", `Codex Desktop hook 状态是 ${desktop.status}。${desktop.reason}`);
   } else {
     clearLocalIssueNotification("desktop-hook-not-ready");
   }
@@ -139,7 +139,7 @@ export function runWatchdog(): WatchdogRunResult {
     issues.push("owner context token is stale");
     notifyLocalIssue(
       "context-token-stale",
-      "WeChat Codex",
+      "Codex Beeper",
       "需要刷新微信会话",
       "微信 iLink context_token 已失效。请给 ClawBot/iLink 发任意消息刷新，刷新后会自动补发未送达通知。",
     );
@@ -150,7 +150,7 @@ export function runWatchdog(): WatchdogRunResult {
   const undeliveredNotices = state.countUndeliveredNotices();
   if (undeliveredNotices > 0) {
     issues.push(`${undeliveredNotices} undelivered notice(s)`);
-    notifyLocalIssue("undelivered-notices", "WeChat Codex", "有通知尚未送达", `当前有 ${undeliveredNotices} 条微信通知未送达。若微信会话已失效，请给 ClawBot/iLink 发任意消息刷新。`);
+    notifyLocalIssue("undelivered-notices", "Codex Beeper", "有通知尚未送达", `当前有 ${undeliveredNotices} 条微信通知未送达。若微信会话已失效，请给 ClawBot/iLink 发任意消息刷新。`);
   } else {
     clearLocalIssueNotification("undelivered-notices");
   }

@@ -1,6 +1,6 @@
 # Security Policy
 
-WeChat Codex Assistant runs local Codex turns from a chat app. Treat it as a remote-control surface for your machine.
+Codex Beeper runs local Codex turns from a chat app. Treat it as a remote-control surface for your machine.
 
 ## Supported Versions
 

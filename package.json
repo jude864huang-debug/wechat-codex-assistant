@@ -1,5 +1,5 @@
 {
-  "name": "wechat-codex-assistant",
+  "name": "codex-beeper",
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",
@@ -10,6 +10,7 @@
     "SECURITY.md"
   ],
   "bin": {
+    "codex-beeper": "./dist/cli.js",
     "wechat-codex": "./dist/cli.js"
   },
   "scripts": {
@@ -20,7 +21,7 @@
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js start",
     "doctor": "node dist/cli.js doctor",
-    "schema:check": "codex app-server generate-ts --out /tmp/wechat-codex-app-schema",
+    "schema:check": "codex app-server generate-ts --out /tmp/codex-beeper-app-schema",
     "scan:secrets": "node scripts/secret-scan.mjs",
     "release:check": "npm run ci && npm run schema:check && npm run scan:secrets"
   },

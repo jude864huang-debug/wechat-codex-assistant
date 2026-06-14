@@ -93,7 +93,7 @@ export function installHook(projectRoot?: string): void {
   data.hooks ||= {};
   data.hooks.Stop ||= [];
   const command = hookCommand(projectRoot);
-  const existing = JSON.stringify(data.hooks.Stop).includes("wechat-codex");
+  const existing = containsBeeperHook(JSON.stringify(data.hooks.Stop));
   let changed = false;
   if (!existing) {
     data.hooks.Stop.push({
@@ -103,7 +103,7 @@ export function installHook(projectRoot?: string): void {
           command,
           command_windows: command,
           timeout: 10,
-          statusMessage: "wechat-codex: Notifying WeChat",
+          statusMessage: "codex-beeper: Notifying WeChat",
         },
       ],
     });
@@ -120,10 +120,10 @@ export function installHook(projectRoot?: string): void {
 
 export async function trustInstalledHook(cwd = process.cwd()): Promise<{ key: string; currentHash: string; trustStatus: string }> {
   const hook = await readWechatHookMetadata(cwd);
-  if (!hook) throw new Error("未找到 wechat-codex Stop hook，请先运行 hook install。");
+  if (!hook) throw new Error("未找到 Codex Beeper Stop hook，请先运行 hook install。");
   upsertHookTrustState(hook.key, hook.currentHash);
   const verified = await readWechatHookMetadata(cwd);
-  if (!verified) throw new Error("写入 trust 后无法重新读取 wechat-codex Stop hook。");
+  if (!verified) throw new Error("写入 trust 后无法重新读取 Codex Beeper Stop hook。");
   return { key: verified.key, currentHash: verified.currentHash, trustStatus: verified.trustStatus };
 }
 
@@ -132,7 +132,7 @@ export function uninstallHook(): void {
   if (!fs.existsSync(file)) return;
   const data = JSON.parse(fs.readFileSync(file, "utf8")) as any;
   const stop = Array.isArray(data.hooks?.Stop) ? data.hooks.Stop : [];
-  data.hooks.Stop = stop.filter((group: unknown) => !JSON.stringify(group).includes("wechat-codex"));
+  data.hooks.Stop = stop.filter((group: unknown) => !containsBeeperHook(JSON.stringify(group)));
   fs.copyFileSync(file, `${file}.bak-${Date.now()}`);
   writePrivateFile(file, `${JSON.stringify(data, null, 2)}\n`);
 }
@@ -144,7 +144,7 @@ export function hookStatus(): { installed: boolean; hooksFeature: "enabled" | "d
   if (/^\s*hooks\s*=\s*true\s*$/m.test(configRaw) || /^\s*codex_hooks\s*=\s*true\s*$/m.test(configRaw)) hooksFeature = "enabled";
   if (/^\s*hooks\s*=\s*false\s*$/m.test(configRaw) || /^\s*codex_hooks\s*=\s*false\s*$/m.test(configRaw)) hooksFeature = "disabled";
   return {
-    installed: hooksRaw.includes("wechat-codex"),
+    installed: containsBeeperHook(hooksRaw),
     hooksFeature,
     hooksJson: hooksJsonPath(),
     configToml: codexConfigPath(),
@@ -355,7 +355,7 @@ async function readWechatHookMetadata(cwd: string): Promise<{ key: string; curre
   const client = await AppServerClient.start();
   try {
     await client.request("initialize", {
-      clientInfo: { name: "wechat_codex_hook_trust", title: "WeChat Codex Hook Trust", version: "0.1.0" },
+      clientInfo: { name: "codex_beeper_hook_trust", title: "Codex Beeper Hook Trust", version: "0.1.0" },
       capabilities: { experimentalApi: true },
     });
     client.notify("initialized", {});
@@ -364,7 +364,7 @@ async function readWechatHookMetadata(cwd: string): Promise<{ key: string; curre
     };
     for (const entry of response.data || []) {
       for (const hook of entry.hooks || []) {
-        if (hook.key === `${hooksJsonPath()}:stop:0:0` || (hook.command || "").includes("wechat-codex") || (hook.command || "").includes("hook-post")) {
+        if (hook.key === `${hooksJsonPath()}:stop:0:0` || containsBeeperHook(hook.command || "") || (hook.command || "").includes("hook-post")) {
           return { key: hook.key, currentHash: hook.currentHash, trustStatus: hook.trustStatus };
         }
       }
@@ -373,6 +373,10 @@ async function readWechatHookMetadata(cwd: string): Promise<{ key: string; curre
   } finally {
     client.stop();
   }
+}
+
+function containsBeeperHook(value: string): boolean {
+  return value.includes("codex-beeper") || value.includes("wechat-codex");
 }
 
 class AppServerClient {

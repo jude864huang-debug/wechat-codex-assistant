@@ -30,7 +30,7 @@ export function clearLocalIssueNotification(issueKey: string): void {
 export function notifyLocalContextTokenStale(): void {
   notifyLocalIssue(
     "context-token-stale",
-    "WeChat Codex",
+    "Codex Beeper",
     "需要刷新微信会话",
     "微信 iLink context_token 已失效。请给 ClawBot/iLink 发任意消息刷新，否则 Codex 微信通知无法送达。",
   );

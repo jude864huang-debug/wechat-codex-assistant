@@ -109,7 +109,7 @@ export async function sendText(
   contextToken: string,
   options: SendTextOptions = {},
 ): Promise<SentWechatText> {
-  const clientId = options.clientId || `wechat-codex:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+  const clientId = options.clientId || `codex-beeper:${Date.now()}:${Math.random().toString(16).slice(2)}`;
   const itemMsgId = options.itemMsgId || clientId;
   await apiFetch(
     { ...config, wechat: { ...config.wechat, baseUrl: account.baseUrl || config.wechat.baseUrl } },

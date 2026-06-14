@@ -16,9 +16,9 @@ export function errorText(error: unknown): string {
 }
 
 export function log(message: string): void {
-  process.stderr.write(`[wechat-codex] ${sanitizeText(message)}\n`);
+  process.stderr.write(`[codex-beeper] ${sanitizeText(message)}\n`);
 }
 
 export function warn(message: string): void {
-  process.stderr.write(`[wechat-codex] WARN ${sanitizeText(message)}\n`);
+  process.stderr.write(`[codex-beeper] WARN ${sanitizeText(message)}\n`);
 }

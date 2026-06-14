@@ -39,10 +39,10 @@ npm run release:check
 On a real macOS setup:
 
 ```bash
-wechat-codex setup
-wechat-codex bind-owner
-wechat-codex configure
-wechat-codex doctor
+codex-beeper setup
+codex-beeper bind-owner
+codex-beeper configure
+codex-beeper doctor
 ```
 
 Then verify:
@@ -54,7 +54,7 @@ Then verify:
 - A command/file/apply_patch approval request is routed to WeChat.
 - Deny, approve, and timeout paths behave correctly.
 - `context_token` stale recovery retries undelivered notices after the owner sends any message.
-- `wechat-codex watchdog run` reports useful actions/issues.
+- `codex-beeper watchdog run` reports useful actions/issues.
 
 ## 4. Security Posture
 
@@ -71,7 +71,7 @@ Recommended public default:
 }
 ```
 
-Before release, confirm `wechat-codex doctor` does not show high-risk action items for:
+Before release, confirm `codex-beeper doctor` does not show high-risk action items for:
 
 - `danger-full-access + never`
 - `ownerOnly=false`
@@ -82,7 +82,7 @@ Before release, confirm `wechat-codex doctor` does not show high-risk action ite
 - Confirm the MIT license is acceptable before public release.
 - Add repository topics: `codex`, `wechat`, `codex-app-server`, `developer-tools`, `local-first`, `chatops`.
 - Add a short description:
-  - `WeChat companion for Codex Desktop/CLI: completion notifications, quote-to-resume, remote approvals, and local watchdog.`
+  - `WeChat pager for Codex Desktop/CLI: completion notifications, quote-to-resume, remote approvals, and local watchdog.`
 - Enable branch protection after first push.
 - Confirm CI passes on GitHub Actions.
 
@@ -91,7 +91,7 @@ Before release, confirm `wechat-codex doctor` does not show high-risk action ite
 Recommended first release title:
 
 ```text
-v0.1.0 - Codex Desktop/CLI WeChat companion
+v0.1.0 - Codex Beeper
 ```
 
 Recommended release highlights:

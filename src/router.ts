@@ -104,7 +104,7 @@ async function handleCommand(deps: RouterDeps, ctx: WechatContext, text: string)
         ctx,
         deps.config.projects.length
           ? `项目：\n${deps.config.projects.map(formatProjectLine).join("\n")}`
-          : "还没有项目别名。先在本机运行：wechat-codex project add <alias> <path>",
+          : "还没有项目别名。先在本机运行：codex-beeper project add <alias> <path>",
       );
     case "/p": {
       const alias = rest[0];

@@ -10,7 +10,7 @@ import { StateStore } from "./state.js";
 export function doctor(): string {
   const lines: string[] = [];
   const config = loadConfig();
-  lines.push("WeChat Codex doctor");
+  lines.push("Codex Beeper doctor");
   lines.push(`config: ${fs.existsSync(configPath()) ? "ok" : "missing"} (${configPath()})`);
   try {
     lines.push(`codex: ${execFileSync("codex", ["--version"], { encoding: "utf8" }).trim()}`);
@@ -18,7 +18,7 @@ export function doctor(): string {
     lines.push("codex: missing");
   }
   try {
-    execFileSync("codex", ["app-server", "generate-ts", "--out", "/tmp/wechat-codex-doctor-schema"], { encoding: "utf8" });
+    execFileSync("codex", ["app-server", "generate-ts", "--out", "/tmp/codex-beeper-doctor-schema"], { encoding: "utf8" });
     lines.push("app-server schema: ok");
   } catch (error) {
     lines.push(`app-server schema: failed (${String(error)})`);
@@ -29,7 +29,7 @@ export function doctor(): string {
   const persistedOverrides = persistedCodexOverrides();
   const unsupportedOverrides = persistedOverrides.filter(isUnsupportedServiceTierOverride);
   lines.push(`app-server overrides: ${persistedOverrides.length ? persistedOverrides.join(", ") : "none"}`);
-  if (unsupportedOverrides.length) lines.push("action: remove unsupported app-server service_tier overrides from WeChat-Codex config");
+  if (unsupportedOverrides.length) lines.push("action: remove unsupported app-server service_tier overrides from Codex Beeper config");
   const globalServiceTier = globalCodexServiceTier();
   lines.push(`global Codex service_tier: ${globalServiceTier || "unset"}`);
   if (globalServiceTier && ["default", "flex"].includes(globalServiceTier)) {
@@ -60,17 +60,17 @@ export function doctor(): string {
   }
   const desktop = desktopHookReadiness();
   lines.push(`desktop hook readiness: ${desktop.status} (${desktop.reason})`);
-  if (desktop.status === "restart-recommended") lines.push("action: run `wechat-codex desktop restart` before relying on Desktop completion notifications");
+  if (desktop.status === "restart-recommended") lines.push("action: run `codex-beeper desktop restart` before relying on Desktop completion notifications");
   const appServerTransport = inspectAppServerTransport(config);
   lines.push(
     `desktop live update: ${desktopLiveUpdateDoctorStatus(appServerTransport)} (${appServerTransport.reason}; mode=${appServerTransport.modeUsed})`,
   );
   const service = serviceStatus();
   lines.push(`daemon service: ${service.installed ? "installed" : "missing"}, ${service.loaded ? "loaded" : "not loaded"} (${service.plistPath})`);
-  if (!service.loaded) lines.push("action: run `wechat-codex service install` so the WeChat daemon survives logout/crash/reboot");
+  if (!service.loaded) lines.push("action: run `codex-beeper service install` so the WeChat daemon survives logout/crash/reboot");
   const watchdog = serviceStatus("com.codex.wechat.watchdog");
   lines.push(`watchdog service: ${watchdog.installed ? "installed" : "missing"}, ${watchdog.loaded ? "loaded" : "not loaded"} (${watchdog.plistPath})`);
-  if (!watchdog.loaded) lines.push("action: run `wechat-codex watchdog install` so daemon failures can be detected and repaired");
+  if (!watchdog.loaded) lines.push("action: run `codex-beeper watchdog install` so daemon failures can be detected and repaired");
   const heartbeat = readDaemonHeartbeat();
   const age = heartbeatAgeMs(Date.now(), heartbeat);
   lines.push(`daemon heartbeat: ${age == null ? "missing" : age > 2 * 60 * 1000 ? `stale, updated ${formatAge(age)} ago` : `ok, updated ${formatAge(age)} ago`}`);

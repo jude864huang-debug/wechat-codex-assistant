@@ -147,8 +147,8 @@ export class CodexClient {
         "initialize",
         {
           clientInfo: {
-            name: "wechat_codex_assistant",
-            title: "WeChat Codex Assistant",
+            name: "codex_beeper",
+            title: "Codex Beeper",
             version: "0.1.0",
           },
           capabilities: { experimentalApi: true },
@@ -184,7 +184,7 @@ export class CodexClient {
     const response = (await this.request("thread/start", {
       cwd,
       sandbox: runtime.sandbox,
-      serviceName: "wechat-codex-assistant",
+      serviceName: "codex-beeper",
       approvalPolicy: runtime.approvalPolicy,
       config: {
         web_search: "disabled",
@@ -506,7 +506,7 @@ export function denialForMethod(method: string): unknown {
         strictAutoReview: true,
       };
     default:
-      return { error: "Denied by WeChat Codex Assistant safety policy" };
+      return { error: "Denied by Codex Beeper safety policy" };
   }
 }
 

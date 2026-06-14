@@ -38,7 +38,7 @@ export async function sendImage(
 ): Promise<SentWechatImage> {
   const resolved = path.resolve(filePath);
   const uploaded = await uploadImage(config, account, toUserId, resolved);
-  const clientId = `wechat-codex:image:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+  const clientId = `codex-beeper:image:${Date.now()}:${Math.random().toString(16).slice(2)}`;
   const itemMsgId = clientId;
   const aesKeyBase64 = Buffer.from(uploaded.aesKeyHex).toString("base64");
 
@@ -127,7 +127,7 @@ async function uploadImage(config: AppConfig, account: AccountData, toUserId: st
       aeskey: aesKeyHex,
       base_info: {
         channel_version: "2.0.0",
-        bot_agent: "wechat-codex-assistant",
+        bot_agent: "codex-beeper",
       },
     },
     account.token,

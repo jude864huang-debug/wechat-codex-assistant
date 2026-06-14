@@ -128,7 +128,7 @@ async function configure(): Promise<void> {
         }
       }
     } else {
-      console.log("已跳过 hook 安装。之后可运行：wechat-codex hook install");
+      console.log("已跳过 hook 安装。之后可运行：codex-beeper hook install");
     }
 
     const shouldInstallService = await askYesNo(rl, "是否生成 macOS launchd 后台服务配置？", false);
@@ -142,7 +142,7 @@ async function configure(): Promise<void> {
       console.log(`watchdog 加载：${watchdog.loaded ? "ok" : `failed (${watchdog.detail})`}`);
     }
 
-    console.log("配置完成。建议运行：wechat-codex doctor");
+    console.log("配置完成。建议运行：codex-beeper doctor");
   } finally {
     rl.close();
   }
@@ -301,7 +301,7 @@ async function hookCommand(args: string[]): Promise<void> {
     const readiness = desktopHookReadiness();
     if (readiness.status === "restart-recommended") {
       console.log(`Desktop restart recommended: ${readiness.reason}`);
-      console.log("Run: wechat-codex desktop restart");
+      console.log("Run: codex-beeper desktop restart");
     }
     return;
   }
@@ -496,7 +496,7 @@ async function watchdogCommand(args: string[]): Promise<void> {
 }
 
 function help(): string {
-  return `wechat-codex
+  return `codex-beeper
 
 Commands:
   setup                         QR login with WeChat iLink
