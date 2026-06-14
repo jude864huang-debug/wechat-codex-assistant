@@ -302,6 +302,73 @@ describe("referenced notification routing", () => {
     state.close();
     removeStateDbForTests(db);
   });
+
+  it("turns missing rollout errors into a recovery reply and clears stale current thread", async () => {
+    const db = tempDb("router-missing-rollout");
+    removeStateDbForTests(db);
+    const state = new StateStore(db);
+    state.addAllowed("u@im.wechat", "tester", true);
+    const notice = state.createNotice({
+      sessionId: "right-thread",
+      threadId: "right-thread",
+      cwd: "/Users/qqk/Documents/Wechat-Codex",
+      projectAlias: "WeChat-Codex",
+      title: "done",
+      summary: "summary",
+      body: "body",
+      source: "hook",
+      createdAt: 1,
+    });
+    state.patchChat("u@im.wechat", {
+      currentProject: "WeChat-Codex",
+      currentThread: "stale-thread",
+      lastNoticeId: notice.id,
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ret: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const codex = {
+      resumeThread: vi.fn(),
+      runTurn: vi.fn(async () => {
+        throw new Error(JSON.stringify({ code: -32600, message: "no rollout found for thread id stale-thread" }));
+      }),
+      transportStatus: () => ({ configuredMode: "auto", modeUsed: "spawn", liveDesktopUpdates: false, reason: "test" }),
+    } as unknown as RouterDeps["codex"];
+    const config = {
+      ...defaultConfig(),
+      wechatProgress: { typingEnabled: false, typingKeepaliveMs: 5000, heartbeatAfterMs: 0 },
+      projects: [{ alias: "WeChat-Codex", path: "/Users/qqk/Documents/Wechat-Codex" }],
+    };
+
+    await handleWechatText(
+      { config, account: testAccount(), state, codex },
+      {
+        senderId: "u@im.wechat",
+        contextToken: "ctx",
+        text: "/r stale-thread 继续",
+        message: {
+          from_user_id: "u@im.wechat",
+          context_token: "ctx",
+          message_type: 1,
+          item_list: [{ type: 1, text_item: { text: "/r stale-thread 继续" } }],
+        },
+      },
+    );
+
+    expect(codex.resumeThread).toHaveBeenCalledWith("stale-thread", "/Users/qqk/Documents/Wechat-Codex");
+    expect(codex.runTurn).toHaveBeenCalledWith(expect.objectContaining({ threadId: "stale-thread" }));
+    const payload = JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body));
+    expect(payload.msg.item_list[0].text_item.text).toContain("thread 已失效");
+    expect(payload.msg.item_list[0].text_item.text).toContain(`/r ${notice.id} <问题>`);
+    expect(state.getChat("u@im.wechat").currentThread).toBeUndefined();
+    expect(state.getChat("u@im.wechat").lastNoticeId).toBe(notice.id);
+
+    state.close();
+    removeStateDbForTests(db);
+  });
 });
 
 describe("approval reply classification", () => {

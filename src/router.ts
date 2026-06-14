@@ -203,11 +203,19 @@ async function resumeThread(deps: RouterDeps, ctx: WechatContext, target?: strin
   if (!target) return reply(deps, ctx, "用法：/resume <noticeId|threadId|序号>");
   const resolved = resolveThread(deps, ctx.senderId, target);
   if (!resolved.threadId) return reply(deps, ctx, `无法解析 thread：${target}`);
+  try {
+    await deps.codex.resumeThread(resolved.threadId, resolved.project?.path);
+  } catch (error) {
+    if (isMissingRolloutError(error)) {
+      await replyMissingRollout(deps, ctx, resolved.threadId, error);
+      return;
+    }
+    throw error;
+  }
   deps.state.patchChat(ctx.senderId, {
     currentThread: resolved.threadId,
     currentProject: resolved.project?.alias || deps.state.getChat(ctx.senderId).currentProject,
   });
-  await deps.codex.resumeThread(resolved.threadId, resolved.project?.path);
   await reply(deps, ctx, `已绑定 thread：${resolved.threadId}。续写请使用 /r <noticeId|threadId|序号> <问题>，或引用完成通知直接回复。${formatDesktopLiveUpdateNote(deps.codex.transportStatus())}`);
 }
 
@@ -215,7 +223,15 @@ async function continueResolvedThread(deps: RouterDeps, ctx: WechatContext, targ
   const resolved = resolveThread(deps, ctx.senderId, target);
   if (!resolved.threadId) return reply(deps, ctx, `无法解析 thread：${target}`);
   if (resolved.project?.notifyOnly) return reply(deps, ctx, `项目 ${resolved.project.alias} 标记为仅通知，不允许从微信远程续写。`);
-  await continueThread(deps, ctx, resolved.project, resolved.threadId, prompt);
+  try {
+    await continueThread(deps, ctx, resolved.project, resolved.threadId, prompt);
+  } catch (error) {
+    if (isMissingRolloutError(error)) {
+      await replyMissingRollout(deps, ctx, resolved.threadId, error);
+      return;
+    }
+    throw error;
+  }
 }
 
 async function continueThread(deps: RouterDeps, ctx: WechatContext, project: ProjectConfig | undefined, threadId: string, prompt: string): Promise<void> {
@@ -303,6 +319,32 @@ function resolveThread(deps: RouterDeps, senderId: string, target: string): { th
     return { threadId: thread?.id, project: thread?.cwd ? matchProjectByCwd(deps.config, thread.cwd) : undefined };
   }
   return { threadId: target, project: getProject(deps.config, deps.state.getChat(senderId).currentProject) };
+}
+
+function isMissingRolloutError(error: unknown): boolean {
+  return /no rollout found for thread id/i.test(errorText(error));
+}
+
+async function replyMissingRollout(deps: RouterDeps, ctx: WechatContext, attemptedThreadId: string, error: unknown): Promise<void> {
+  const text = errorText(error);
+  const missingThreadId = text.match(/no rollout found for thread id ([0-9a-f-]+)/i)?.[1] || attemptedThreadId;
+  const chat = deps.state.getChat(ctx.senderId);
+  if (chat.currentThread === attemptedThreadId || chat.currentThread === missingThreadId) {
+    deps.state.patchChat(ctx.senderId, { currentThread: undefined, pendingNewProject: undefined });
+  }
+  const lastNotice = chat.lastNoticeId ? deps.state.getNotice(chat.lastNoticeId, ctx.senderId) : null;
+  const retryHint = lastNotice
+    ? `最近可用通知是 ${lastNotice.id}，请发送：/r ${lastNotice.id} <问题>，或直接引用那条完成通知回复。`
+    : "请引用一条 Codex 完成通知回复；如果是新任务，请使用 /new <项目别名> <问题>。";
+  await reply(
+    deps,
+    ctx,
+    `这个 Codex thread 已失效，当前 app-server 找不到对应 rollout（${shortThreadId(missingThreadId)}），本次没有继续执行。${retryHint}`,
+  );
+}
+
+function shortThreadId(threadId: string): string {
+  return threadId.length > 12 ? `${threadId.slice(0, 8)}...${threadId.slice(-4)}` : threadId;
 }
 
 export function resolveReferencedNotice(deps: Pick<RouterDeps, "state">, senderId: string, message?: WechatMessage): NoticeRecord | null {
