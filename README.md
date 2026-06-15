@@ -92,9 +92,12 @@ Fallback commands:
 /r <noticeId|threadId|序号> <问题>
 /threads [alias]
 /resume <noticeId|threadId|序号>
+/stop [noticeId|threadId|序号]
 ```
 
-Plain text without a quote only continues the latest Codex completion notice (`last_notice_id`). It does **not** use a sticky current project/thread, because stale chat state can run work in the wrong project.
+Plain text without a quote continues the latest Codex completion notice (`last_notice_id`). If WeChat delivery is delayed or messages arrive out of order, quote/reply to the intended completion notification or use `/r <noticeId|threadId|序号> <问题>` to avoid ambiguity.
+
+Send a plain `1` to refresh the WeChat channel/context token without sending anything to Codex. If a WeChat-started task is still running, ordinary text is not queued or sent to Codex; use `/stop` to request an interrupt, or wait for the completion notice.
 
 ## Remote Approvals
 
@@ -149,12 +152,12 @@ codex-beeper project add secret-app ~/Code/secret-app --notify-only
 This project controls local coding agents from a chat app, so the default posture is intentionally conservative.
 
 - `wechatSecurity.ownerOnly=true`: only the owner account can start remote Codex turns, even if other senders are allowlisted.
-- Local image sending is off by default:
-  - `wechatSecurity.allowLocalImageSend=false`
-  - `wechatSecurity.autoSendLocalImages=false`
-- If local image sending is enabled, files must be inside the current project directory or `wechatSecurity.allowedMediaRoots`.
+- Local image sending is on by default for project-scoped images:
+  - `wechatSecurity.allowLocalImageSend=true`
+  - `wechatSecurity.autoSendLocalImages=true`
+- Images must be inside the current project directory or `wechatSecurity.allowedMediaRoots`.
 - WeChat runtime is shown during `configure`; keeping `danger-full-access + never` requires explicit confirmation.
-- `doctor` warns when full-access remote control, non-owner access, or local media sending is enabled.
+- `doctor` warns when full-access remote control, non-owner access, or extra media roots increase risk.
 
 Example explicit media config:
 
@@ -163,7 +166,7 @@ Example explicit media config:
   "wechatSecurity": {
     "ownerOnly": true,
     "allowLocalImageSend": true,
-    "autoSendLocalImages": false,
+    "autoSendLocalImages": true,
     "allowedMediaRoots": ["~/Pictures/codex-share"]
   }
 }
@@ -184,8 +187,9 @@ codex-beeper runtime status
 The daemon is designed to survive common local and iLink failure modes:
 
 - Inbound WeChat messages are persisted before advancing the iLink sync buffer.
-- Sender queues serialize normal messages per WeChat sender.
-- Approval messages bypass normal sender queues so they can unblock an active turn.
+- Inbound messages are claimed with a processing lease; a daemon restart will not immediately replay a message that was already being handled.
+- Sender queues serialize normal messages per WeChat sender when idle.
+- Approval, keepalive, stop, and busy-check messages can bypass normal sender queues so they can unblock or inspect an active turn.
 - Codex turns have a configurable timeout (`codexTurnTimeoutMs`, default 1 hour) and call `turn/interrupt` before restarting the app-server transport.
 - Hook payloads are queued if the daemon is down.
 - Notices stay undelivered until a valid `context_token` is available.
@@ -225,11 +229,13 @@ WeChat commands:
 ```text
 /projects
 /p <alias>
+/p <alias> /new
 /new <alias> <问题>
 /new
 /threads [alias]
 /show <noticeId|last>
 /resume <noticeId|threadId|序号>
+/stop [noticeId|threadId|序号]
 /r <noticeId|threadId|序号> <问题>
 /approve [审批码]
 /deny [审批码]
@@ -275,7 +281,7 @@ Common issues:
 | WeChat continuation works but Desktop does not update live | Shared app-server proxy unavailable. | Reopen the Desktop conversation, or wait for proxy support. |
 | `/new` still asks for approval unexpectedly | WeChat runtime differs from global Codex runtime. | `codex-beeper runtime status`, then choose `safe` or `full-access`. |
 | Non-owner allowlisted user cannot run commands | `wechatSecurity.ownerOnly=true`. | Keep this for personal installs; disable only if you reviewed every sender. |
-| Local image sending is rejected | Disabled by default or path outside allowed roots. | Enable media config and use project/allowed roots only. |
+| Local image sending is rejected | Sending is disabled in config, or the path is outside the current project / allowed roots. | Enable media config and use project/allowed roots only. |
 
 ## Development
 

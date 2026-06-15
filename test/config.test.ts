@@ -62,11 +62,11 @@ describe("config sanitization", () => {
     expect(defaultConfig().codexTurnTimeoutMs).toBe(3600000);
   });
 
-  it("defaults WeChat security to owner-only and no local media sending", () => {
+  it("defaults WeChat security to owner-only and project-scoped local media sending", () => {
     expect(defaultConfig().wechatSecurity).toEqual({
       ownerOnly: true,
-      allowLocalImageSend: false,
-      autoSendLocalImages: false,
+      allowLocalImageSend: true,
+      autoSendLocalImages: true,
       allowedMediaRoots: [],
     });
     expect(

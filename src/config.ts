@@ -25,8 +25,8 @@ export function defaultConfig(): AppConfig {
     wechatRuntime: defaultWechatRuntimeFromCodexConfig(),
     wechatSecurity: {
       ownerOnly: true,
-      allowLocalImageSend: false,
-      autoSendLocalImages: false,
+      allowLocalImageSend: true,
+      autoSendLocalImages: true,
       allowedMediaRoots: [],
     },
     notificationThresholdSeconds: 30,

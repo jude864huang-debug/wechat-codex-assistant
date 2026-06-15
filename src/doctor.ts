@@ -49,8 +49,8 @@ export function doctor(): string {
   if (!config.wechatSecurity.ownerOnly) {
     lines.push("action: ownerOnly is disabled; review every allowlisted sender before publishing or sharing this setup");
   }
-  if (config.wechatSecurity.allowLocalImageSend || config.wechatSecurity.autoSendLocalImages) {
-    lines.push("action: local image sending is enabled; keep allowedMediaRoots narrow and avoid sensitive project roots");
+  if (config.wechatSecurity.allowedMediaRoots.length) {
+    lines.push("action: local image sending has extra allowedMediaRoots; keep them narrow and avoid sensitive project roots");
   }
   if (globalRuntime.sandboxMode === "danger-full-access" && config.wechatRuntime.sandbox !== "danger-full-access") {
     lines.push("note: WeChat-initiated turns are more restricted than Codex Desktop global sandbox_mode");

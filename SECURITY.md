@@ -9,7 +9,7 @@ This project is pre-1.0. Security fixes target the latest `main` branch until ta
 ## Safe Defaults
 
 - Remote control is owner-only by default.
-- Local image sending is disabled by default.
+- Local image sending is enabled by default, but only for images inside the current project directory unless extra roots are explicitly configured.
 - WeChat can only select configured project aliases, not arbitrary local paths.
 - `notifyOnly` projects can receive notifications but cannot be resumed from WeChat.
 - Approval requests time out and deny by default.

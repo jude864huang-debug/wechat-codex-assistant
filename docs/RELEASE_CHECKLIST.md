@@ -64,8 +64,8 @@ Recommended public default:
 {
   "wechatSecurity": {
     "ownerOnly": true,
-    "allowLocalImageSend": false,
-    "autoSendLocalImages": false,
+    "allowLocalImageSend": true,
+    "autoSendLocalImages": true,
     "allowedMediaRoots": []
   }
 }
@@ -75,7 +75,7 @@ Before release, confirm `codex-beeper doctor` does not show high-risk action ite
 
 - `danger-full-access + never`
 - `ownerOnly=false`
-- local image sending enabled with broad roots
+- local image sending configured with broad extra roots
 
 ## 5. GitHub Metadata
 

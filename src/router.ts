@@ -23,6 +23,8 @@ const HEARTBEAT_MESSAGES = [
   "这个任务比预期久一些，还在继续处理。",
   "还在跑，等完成后会直接把结果发到这里。",
 ];
+const ACTIVE_TURN_NO_TIMEOUT_TTL_MS = 24 * 60 * 60 * 1000;
+const ACTIVE_TURN_GRACE_MS = 60_000;
 
 export async function handleWechatText(deps: RouterDeps, ctx: WechatContext): Promise<void> {
   deps.state.upsertContextToken(ctx.senderId, ctx.contextToken);
@@ -51,6 +53,15 @@ export async function handleWechatText(deps: RouterDeps, ctx: WechatContext): Pr
   }
   if (hasReferencedMessage(ctx.message)) {
     await reply(deps, ctx, "引用的消息无法定位到 Codex 通知，已停止处理，避免跑错项目。请引用带项目标题/短码的 Codex 通知，或使用 /r <noticeId> <问题>。");
+    return;
+  }
+  if (isKeepaliveRefreshText(text)) {
+    await reply(deps, ctx, "已刷新微信通道，没有发送给 Codex。");
+    return;
+  }
+  const activeTurn = deps.state.getLatestActiveTurnForSender(ctx.senderId);
+  if (activeTurn) {
+    await reply(deps, ctx, busyTurnText(activeTurn.state));
     return;
   }
   const chat = deps.state.getChat(ctx.senderId);
@@ -110,8 +121,13 @@ async function handleCommand(deps: RouterDeps, ctx: WechatContext, text: string)
       const alias = rest[0];
       const project = getProject(deps.config, alias);
       if (!project) return reply(deps, ctx, `未知项目别名：${alias || "(空)"}`);
+      if (isArmNewThreadRequest(rest.slice(1))) return armNextNewThread(deps, ctx, project);
       deps.state.patchChat(ctx.senderId, { currentProject: project.alias, pendingNewProject: undefined });
-      return reply(deps, ctx, `默认新建项目已切换为 ${project.alias}。普通文本会默认续写最近一条 Codex 通知；新建任务可用 /new。`);
+      return reply(
+        deps,
+        ctx,
+        `默认新建项目已切换为 ${project.alias}。普通文本会默认续写最近一条 Codex 通知；要在 ${project.alias} 新建任务，请发送 /new，或直接 /new ${project.alias} <问题>。`,
+      );
     }
     case "/new":
       return newThread(deps, ctx, tail);
@@ -123,6 +139,8 @@ async function handleCommand(deps: RouterDeps, ctx: WechatContext, text: string)
       return sendLocalImage(deps, ctx, tail);
     case "/resume":
       return resumeThread(deps, ctx, rest[0]);
+    case "/stop":
+      return stopActiveTurn(deps, ctx, rest[0]);
     case "/r": {
       const target = rest[0];
       const query = tail.slice((target || "").length).trim();
@@ -154,10 +172,19 @@ async function newThread(deps: RouterDeps, ctx: WechatContext, tail: string): Pr
   if (!project) return reply(deps, ctx, "请指定项目别名：/new <alias> <问题>");
   if (project.notifyOnly) return reply(deps, ctx, `项目 ${project.alias} 标记为仅通知，不允许从微信远程续写。`);
   if (!prompt) {
-    deps.state.patchChat(ctx.senderId, { currentProject: project.alias, pendingNewProject: project.alias });
-    return reply(deps, ctx, `下一条消息会在项目 ${project.alias} 中新建 Codex thread。`);
+    return armNextNewThread(deps, ctx, project);
   }
   await createAndContinueThread(deps, ctx, project, prompt);
+}
+
+async function armNextNewThread(deps: RouterDeps, ctx: WechatContext, project: ProjectConfig): Promise<void> {
+  if (project.notifyOnly) return reply(deps, ctx, `项目 ${project.alias} 标记为仅通知，不允许从微信远程续写。`);
+  deps.state.patchChat(ctx.senderId, { currentProject: project.alias, pendingNewProject: project.alias });
+  return reply(deps, ctx, `下一条消息会在项目 ${project.alias} 中新建 Codex thread。`);
+}
+
+function isArmNewThreadRequest(tokens: string[]): boolean {
+  return tokens.some((token) => ["/new", "new"].includes(token.toLowerCase()));
 }
 
 async function createAndContinueThread(deps: RouterDeps, ctx: WechatContext, project: ProjectConfig, prompt: string): Promise<void> {
@@ -195,7 +222,7 @@ async function sendLocalImage(deps: RouterDeps, ctx: WechatContext, tail: string
   const project = getProject(deps.config, deps.state.getChat(ctx.senderId).currentProject);
   const filePath = resolveImagePath(tail, project?.path);
   if (!deps.config.wechatSecurity.allowLocalImageSend) {
-    return reply(deps, ctx, "本机图片发送默认关闭。请在 ~/.codex-wechat/config.json 中显式设置 wechatSecurity.allowLocalImageSend=true。");
+    return reply(deps, ctx, "本机图片发送当前已关闭。请在 ~/.codex-wechat/config.json 中设置 wechatSecurity.allowLocalImageSend=true。");
   }
   if (!isAllowedLocalMediaPath(deps.config, filePath, project?.path)) {
     return reply(deps, ctx, "图片路径不在当前项目目录或 wechatSecurity.allowedMediaRoots 中，已拒绝发送。");
@@ -227,6 +254,37 @@ async function resumeThread(deps: RouterDeps, ctx: WechatContext, target?: strin
   await reply(deps, ctx, `已绑定 thread：${resolved.threadId}。续写请使用 /r <noticeId|threadId|序号> <问题>，或引用完成通知直接回复。${formatDesktopLiveUpdateNote(deps.codex.transportStatus())}`);
 }
 
+async function stopActiveTurn(deps: RouterDeps, ctx: WechatContext, target?: string): Promise<void> {
+  let active = target ? null : deps.state.getLatestActiveTurnForSender(ctx.senderId);
+  if (target) {
+    const resolved = resolveThread(deps, ctx.senderId, target);
+    if (!resolved.threadId) {
+      await reply(deps, ctx, `无法解析 thread：${target}`);
+      return;
+    }
+    active = deps.state.getActiveTurn(resolved.threadId);
+  }
+  if (!active) {
+    await reply(deps, ctx, "当前没有正在跑的任务。");
+    return;
+  }
+  if (active.state === "stopping") {
+    await reply(deps, ctx, "当前任务正在停止中，请稍等完成通知或错误提示。");
+    return;
+  }
+  if (!active.turnId) {
+    await reply(deps, ctx, "当前任务正在启动，还没有可停止的 turn id。请稍后再发送 /stop。");
+    return;
+  }
+  try {
+    await deps.codex.interruptTurn(active.threadId, active.turnId);
+    deps.state.markActiveTurnStopping(active.threadId);
+    await reply(deps, ctx, `已发送停止请求：${shortThreadId(active.threadId)}。`);
+  } catch (error) {
+    await reply(deps, ctx, `停止请求失败：${errorText(error)}`);
+  }
+}
+
 async function continueResolvedThread(deps: RouterDeps, ctx: WechatContext, target: string, prompt: string): Promise<void> {
   const resolved = resolveThread(deps, ctx.senderId, target);
   if (!resolved.threadId) return reply(deps, ctx, `无法解析 thread：${target}`);
@@ -250,6 +308,19 @@ async function continueThread(
   prompt: string,
   options: { resumeFirst?: boolean } = {},
 ): Promise<void> {
+  const lock = deps.state.tryAcquireActiveTurn({
+    threadId,
+    senderId: ctx.senderId,
+    projectAlias: project?.alias,
+    prompt,
+    expiresAt: activeTurnExpiresAt(deps.config.codexTurnTimeoutMs),
+  });
+  if (!lock.acquired) {
+    await reply(deps, ctx, busyTurnText(lock.turn.state));
+    return;
+  }
+  deps.state.patchChat(ctx.senderId, { currentThread: threadId, currentProject: project?.alias, pendingNewProject: undefined });
+
   const progress = startWechatProgress(deps, ctx);
   let result;
   try {
@@ -260,10 +331,14 @@ async function continueThread(
       prompt,
       cwd: project?.path,
       timeoutMs: deps.config.codexTurnTimeoutMs,
-      onTurnId: (turnId) => deps.state.recordSelfTurn(threadId, prompt, turnId),
+      onTurnId: (turnId) => {
+        deps.state.updateActiveTurnId(threadId, turnId);
+        deps.state.recordSelfTurn(threadId, prompt, turnId);
+      },
     });
   } finally {
     progress.stop();
+    deps.state.releaseActiveTurn(threadId);
   }
   deps.state.recordSelfTurn(threadId, prompt, result.turnId, result.text);
   deps.state.patchChat(ctx.senderId, { currentThread: threadId, currentProject: project?.alias, pendingNewProject: undefined });
@@ -318,6 +393,20 @@ function startWechatProgress(deps: RouterDeps, ctx: WechatContext): { stop: () =
       stopTyping();
     },
   };
+}
+
+function isKeepaliveRefreshText(text: string): boolean {
+  return text.trim() === "1";
+}
+
+function activeTurnExpiresAt(timeoutMs: number): number {
+  const ttl = timeoutMs > 0 ? timeoutMs + ACTIVE_TURN_GRACE_MS : ACTIVE_TURN_NO_TIMEOUT_TTL_MS;
+  return Date.now() + ttl;
+}
+
+function busyTurnText(state: "active" | "stopping"): string {
+  if (state === "stopping") return "当前任务正在停止中，本条没有发送给 Codex。请等待完成通知或错误提示。";
+  return "当前任务还在跑，本条没有发送给 Codex。可发送 /stop 停止当前任务，或等待完成后再继续。";
 }
 
 function resolveThread(deps: RouterDeps, senderId: string, target: string): { threadId?: string; project?: ProjectConfig; notice?: NoticeRecord } {
@@ -400,9 +489,10 @@ async function replyNotice(deps: RouterDeps, ctx: WechatContext, notice: NoticeR
   await sendMentionedImages(deps, ctx.senderId, ctx.contextToken, notice.body || notice.summary, notice.cwd);
 }
 
-export function formatNoticeSummary(notice: NoticeRecord): string {
+export function formatNoticeSummary(notice: NoticeRecord, options: { redelivery?: boolean } = {}): string {
   const project = notice.projectAlias || projectNameFromCwd(notice.cwd);
-  const title = project ? `${project}项目（${notice.id}）已出话：` : `Codex（${notice.id}）已出话：`;
+  const prefix = options.redelivery ? "【补发】" : "";
+  const title = project ? `${prefix}${project}项目（${notice.id}）已出话：` : `${prefix}Codex（${notice.id}）已出话：`;
   const body = markdownToWechatText(notice.body || notice.summary || "(Codex 未返回正文)");
   return `${title}\n${body}`;
 }
@@ -413,7 +503,7 @@ export function formatNoticeContinuationPrefix(notice: NoticeRecord): string {
 }
 
 export function formatDesktopLiveUpdateNote(status: AppServerTransportStatus): string {
-  return status.liveDesktopUpdates ? "" : "\n\n提示：Desktop 未接入共享 app-server，需重开该会话查看微信追加轮次。";
+  return status.liveDesktopUpdates ? "" : "\n\n提示：微信追问/回复的内容，需要重开 Codex Desktop 才能刷新。";
 }
 
 function projectNameFromCwd(cwd?: string): string {
@@ -433,14 +523,16 @@ function helpText(): string {
   return [
     "/projects - 列出项目别名",
     "/p <alias> - 设置 /new 默认项目",
+    "/p <alias> /new - 设置默认项目，并让下一条普通消息新建 Codex thread",
     "/new <alias> <问题> - 新建 Codex thread",
     "/new - 下一条普通消息新建 Codex thread",
     "/threads [alias] - 列出最近 thread",
     "/resume <noticeId|threadId|序号> - 绑定或打开 thread",
+    "/stop [noticeId|threadId|序号] - 停止当前正在跑的微信任务",
     "/show <noticeId|last> - 展开完成通知",
     "/send <图片路径> - 发送本机图片到微信",
     "/r <noticeId|threadId|序号> <问题> - 继续指定 thread",
-    "普通文本默认续写最近一条 Codex 完成通知；不会沿用粘性的当前项目。",
+    "普通文本默认续写最近一条 Codex 完成通知；如有消息堆积，请引用完成通知或使用 /r <noticeId> <问题>。",
     "/approve [审批码] - 批准 Codex 用户确认请求",
     "/deny [审批码] - 拒绝 Codex 用户确认请求",
     "/approvals - 查看待审批请求",

@@ -297,6 +297,11 @@ export class CodexClient {
     }
   }
 
+  async interruptTurn(threadId: string, turnId: string): Promise<void> {
+    await this.start();
+    await this.request("turn/interrupt", { threadId, turnId }, 0, INTERRUPT_TIMEOUT_MS);
+  }
+
   private async interruptTimedOutTurn(threadId: string, turnId: string | undefined, message: string): Promise<void> {
     if (!turnId) {
       warn(`${message}; turn id was not available, restarting app-server transport`);
@@ -304,7 +309,7 @@ export class CodexClient {
       return;
     }
     try {
-      await this.request("turn/interrupt", { threadId, turnId }, 0, INTERRUPT_TIMEOUT_MS);
+      await this.interruptTurn(threadId, turnId);
     } catch (error) {
       warn(`turn/interrupt failed after timeout: ${errorText(error)}; restarting app-server transport`);
       this.resetProcess(new Error(message));

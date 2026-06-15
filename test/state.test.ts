@@ -113,4 +113,112 @@ describe("StateStore", () => {
     store.close();
     removeStateDbForTests(db);
   });
+
+  it("deduplicates replayed inbound text even when message ids differ", () => {
+    const db = tempDb("inbound-duplicate-text");
+    removeStateDbForTests(db);
+    const store = new StateStore(db);
+    const first = {
+      message_id: 100,
+      from_user_id: "u@im.wechat",
+      context_token: "ctx",
+      message_type: 1,
+      item_list: [{ type: 1, msg_id: "m100", text_item: { text: "这个消息重放层的bug需要被解决" } }],
+    };
+    const replay = {
+      message_id: 101,
+      from_user_id: "u@im.wechat",
+      context_token: "ctx",
+      message_type: 1,
+      item_list: [{ type: 1, msg_id: "m101", text_item: { text: "  这个消息重放层的bug需要被解决  " } }],
+    };
+    const otherSender = {
+      ...replay,
+      message_id: 102,
+      from_user_id: "other@im.wechat",
+      item_list: [{ type: 1, msg_id: "m102", text_item: { text: "这个消息重放层的bug需要被解决" } }],
+    };
+
+    store.enqueueInboundMessages([first]);
+    store.markInboundProcessing("message:100");
+    store.enqueueInboundMessages([replay, otherSender]);
+
+    expect(store.pendingInboundMessages().map((record) => record.key)).toEqual(["message:100", "message:102"]);
+    expect(store.getInboundMessage("message:101")).toBeNull();
+
+    store.close();
+    removeStateDbForTests(db);
+  });
+
+  it("claims inbound messages once until an in-flight processing lease is stale", () => {
+    const db = tempDb("inbound-claim");
+    removeStateDbForTests(db);
+    const store = new StateStore(db);
+    const message = {
+      message_id: 200,
+      from_user_id: "u@im.wechat",
+      context_token: "ctx",
+      message_type: 1,
+      item_list: [{ type: 1, msg_id: "m200", text_item: { text: "生成一页的 PDF 版并截图" } }],
+    };
+
+    store.enqueueInboundMessages([message]);
+    const first = store.claimInboundMessage("message:200", Date.now() - 1000);
+    expect(first?.attempts).toBe(1);
+    expect(store.claimInboundMessage("message:200", Date.now() - 1000)).toBeNull();
+    expect(store.claimableInboundMessages(100, Date.now() - 1000)).toHaveLength(0);
+
+    const staleRetry = store.claimInboundMessage("message:200", Date.now() + 1000);
+    expect(staleRetry?.attempts).toBe(2);
+
+    store.markInboundProcessed("message:200");
+    expect(store.claimInboundMessage("message:200", Date.now() + 1000)).toBeNull();
+
+    store.close();
+    removeStateDbForTests(db);
+  });
+
+  it("tracks active turns and clears expired locks", () => {
+    const db = tempDb("active-turns");
+    removeStateDbForTests(db);
+    const store = new StateStore(db);
+    const first = store.tryAcquireActiveTurn({
+      threadId: "thread-1",
+      senderId: "u@im.wechat",
+      projectAlias: "p",
+      prompt: "继续",
+      expiresAt: Date.now() + 60_000,
+    });
+
+    expect(first.acquired).toBe(true);
+    expect(store.getActiveTurn("thread-1")?.state).toBe("active");
+    store.updateActiveTurnId("thread-1", "turn-1");
+    expect(store.getLatestActiveTurnForSender("u@im.wechat")?.turnId).toBe("turn-1");
+
+    const second = store.tryAcquireActiveTurn({
+      threadId: "thread-1",
+      senderId: "u@im.wechat",
+      prompt: "hi",
+      expiresAt: Date.now() + 60_000,
+    });
+    expect(second.acquired).toBe(false);
+    expect(second.turn.turnId).toBe("turn-1");
+
+    store.markActiveTurnStopping("thread-1");
+    expect(store.getActiveTurn("thread-1")?.state).toBe("stopping");
+    store.releaseActiveTurn("thread-1");
+    expect(store.getActiveTurn("thread-1")).toBeNull();
+
+    store.tryAcquireActiveTurn({
+      threadId: "expired-thread",
+      senderId: "u@im.wechat",
+      prompt: "old",
+      expiresAt: Date.now() - 1,
+    });
+    store.clearExpiredActiveTurns();
+    expect(store.getActiveTurn("expired-thread")).toBeNull();
+
+    store.close();
+    removeStateDbForTests(db);
+  });
 });

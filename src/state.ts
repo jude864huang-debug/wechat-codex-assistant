@@ -5,6 +5,8 @@ import { statePath } from "./paths.js";
 import type { HookPayload, NoticeRecord, ThreadSummary, WechatMessage } from "./types.js";
 import { stableHash } from "./text.js";
 
+const INBOUND_DUPLICATE_WINDOW_MS = 30_000;
+
 export interface ChatState {
   senderId: string;
   currentProject?: string;
@@ -29,6 +31,25 @@ export interface InboundMessageRecord {
   processingAt?: number;
   processedAt?: number;
   lastError?: string;
+}
+
+export type ActiveTurnState = "active" | "stopping";
+
+export interface ActiveTurnRecord {
+  threadId: string;
+  senderId: string;
+  turnId?: string;
+  projectAlias?: string;
+  promptHash: string;
+  startedAt: number;
+  updatedAt: number;
+  expiresAt: number;
+  state: ActiveTurnState;
+}
+
+export interface ActiveTurnAcquireResult {
+  acquired: boolean;
+  turn: ActiveTurnRecord;
 }
 
 export class StateStore {
@@ -122,6 +143,17 @@ export class StateStore {
         processing_at INTEGER,
         processed_at INTEGER,
         last_error TEXT
+      );
+      CREATE TABLE IF NOT EXISTS active_turns (
+        thread_id TEXT PRIMARY KEY,
+        sender_id TEXT NOT NULL,
+        turn_id TEXT,
+        project_alias TEXT,
+        prompt_hash TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        state TEXT NOT NULL
       );
     `);
     this.ensureColumn("chat_state", "pending_new_project", "TEXT");
@@ -335,9 +367,29 @@ export class StateStore {
     for (const message of messages) {
       const key = inboundMessageKey(message);
       keys.push(key);
+      if (this.recentDuplicateInboundMessageKey(message, now)) continue;
       stmt.run(key, message.from_user_id, JSON.stringify(message), now);
     }
     return keys;
+  }
+
+  private recentDuplicateInboundMessageKey(message: WechatMessage, now: number): string | null {
+    const fingerprint = inboundTextFingerprint(message);
+    if (!fingerprint) return null;
+    const rows = this.db
+      .prepare(
+        "SELECT message_key, payload FROM inbound_messages WHERE sender_id = ? AND (processed_at IS NULL OR created_at >= ? OR processed_at >= ?) ORDER BY created_at DESC LIMIT 200",
+      )
+      .all(message.from_user_id, now - INBOUND_DUPLICATE_WINDOW_MS, now - INBOUND_DUPLICATE_WINDOW_MS) as Array<{ message_key: string; payload: string }>;
+    for (const row of rows) {
+      try {
+        const existing = JSON.parse(String(row.payload)) as WechatMessage;
+        if (inboundTextFingerprint(existing) === fingerprint) return String(row.message_key);
+      } catch {
+        // Ignore corrupt legacy payloads; they should not block new messages.
+      }
+    }
+    return null;
   }
 
   getInboundMessage(key: string): InboundMessageRecord | null {
@@ -350,6 +402,27 @@ export class StateStore {
       .prepare("SELECT * FROM inbound_messages WHERE processed_at IS NULL ORDER BY created_at ASC LIMIT ?")
       .all(limit)
       .map((row) => rowToInboundMessage(row as Record<string, unknown>));
+  }
+
+  claimableInboundMessages(limit = 100, staleProcessingBefore = Date.now()): InboundMessageRecord[] {
+    return this.db
+      .prepare(
+        "SELECT * FROM inbound_messages WHERE processed_at IS NULL AND (processing_at IS NULL OR processing_at <= ?) ORDER BY created_at ASC LIMIT ?",
+      )
+      .all(staleProcessingBefore, limit)
+      .map((row) => rowToInboundMessage(row as Record<string, unknown>));
+  }
+
+  claimInboundMessage(key: string, staleProcessingBefore = Date.now()): InboundMessageRecord | null {
+    const now = Date.now();
+    const result = this.db
+      .prepare(
+        "UPDATE inbound_messages SET processing_at = ?, attempts = attempts + 1 WHERE message_key = ? AND processed_at IS NULL AND (processing_at IS NULL OR processing_at <= ?)",
+      )
+      .run(now, key, staleProcessingBefore) as { changes?: number };
+    if (!result.changes) return null;
+    const row = this.db.prepare("SELECT * FROM inbound_messages WHERE message_key = ?").get(key) as Record<string, unknown> | undefined;
+    return row ? rowToInboundMessage(row) : null;
   }
 
   markInboundProcessing(key: string): void {
@@ -366,6 +439,80 @@ export class StateStore {
     this.db
       .prepare("UPDATE inbound_messages SET processing_at = NULL, last_error = ? WHERE message_key = ? AND processed_at IS NULL")
       .run(error.slice(0, 1000), key);
+  }
+
+  tryAcquireActiveTurn(input: {
+    threadId: string;
+    senderId: string;
+    projectAlias?: string;
+    prompt: string;
+    expiresAt: number;
+  }): ActiveTurnAcquireResult {
+    this.clearExpiredActiveTurns();
+    const existing = this.activeTurnByThread(input.threadId);
+    if (existing) return { acquired: false, turn: existing };
+
+    const now = Date.now();
+    const turn: ActiveTurnRecord = {
+      threadId: input.threadId,
+      senderId: input.senderId,
+      projectAlias: input.projectAlias,
+      promptHash: stableHash(input.prompt),
+      startedAt: now,
+      updatedAt: now,
+      expiresAt: input.expiresAt,
+      state: "active",
+    };
+    this.db
+      .prepare(
+        "INSERT INTO active_turns (thread_id, sender_id, turn_id, project_alias, prompt_hash, started_at, updated_at, expires_at, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        turn.threadId,
+        turn.senderId,
+        null,
+        turn.projectAlias || null,
+        turn.promptHash,
+        turn.startedAt,
+        turn.updatedAt,
+        turn.expiresAt,
+        turn.state,
+      );
+    return { acquired: true, turn };
+  }
+
+  getActiveTurn(threadId: string): ActiveTurnRecord | null {
+    this.clearExpiredActiveTurns();
+    return this.activeTurnByThread(threadId);
+  }
+
+  getLatestActiveTurnForSender(senderId: string): ActiveTurnRecord | null {
+    this.clearExpiredActiveTurns();
+    const row = this.db
+      .prepare("SELECT * FROM active_turns WHERE sender_id = ? ORDER BY started_at DESC LIMIT 1")
+      .get(senderId) as Record<string, unknown> | undefined;
+    return row ? rowToActiveTurn(row) : null;
+  }
+
+  updateActiveTurnId(threadId: string, turnId: string): void {
+    this.db.prepare("UPDATE active_turns SET turn_id = ?, updated_at = ? WHERE thread_id = ?").run(turnId, Date.now(), threadId);
+  }
+
+  markActiveTurnStopping(threadId: string): void {
+    this.db.prepare("UPDATE active_turns SET state = 'stopping', updated_at = ? WHERE thread_id = ?").run(Date.now(), threadId);
+  }
+
+  releaseActiveTurn(threadId: string): void {
+    this.db.prepare("DELETE FROM active_turns WHERE thread_id = ?").run(threadId);
+  }
+
+  clearExpiredActiveTurns(now = Date.now()): void {
+    this.db.prepare("DELETE FROM active_turns WHERE expires_at <= ?").run(now);
+  }
+
+  private activeTurnByThread(threadId: string): ActiveTurnRecord | null {
+    const row = this.db.prepare("SELECT * FROM active_turns WHERE thread_id = ?").get(threadId) as Record<string, unknown> | undefined;
+    return row ? rowToActiveTurn(row) : null;
   }
 
   enqueueHook(payload: HookPayload): void {
@@ -396,6 +543,15 @@ export function inboundMessageKey(message: WechatMessage): string {
   return `hash:${stableHash(JSON.stringify(message))}`;
 }
 
+function inboundTextFingerprint(message: WechatMessage): string | null {
+  const text = (message.item_list || [])
+    .map((item) => item.text_item?.text || "")
+    .find((value) => value.trim().length > 0)
+    ?.replace(/\s+/g, " ")
+    .trim();
+  return text ? stableHash(text) : null;
+}
+
 function rowToNotice(row: Record<string, unknown>): NoticeRecord {
   return {
     id: String(row.id),
@@ -423,6 +579,20 @@ function rowToInboundMessage(row: Record<string, unknown>): InboundMessageRecord
     processingAt: row.processing_at == null ? undefined : Number(row.processing_at),
     processedAt: row.processed_at == null ? undefined : Number(row.processed_at),
     lastError: row.last_error ? String(row.last_error) : undefined,
+  };
+}
+
+function rowToActiveTurn(row: Record<string, unknown>): ActiveTurnRecord {
+  return {
+    threadId: String(row.thread_id),
+    senderId: String(row.sender_id),
+    turnId: row.turn_id ? String(row.turn_id) : undefined,
+    projectAlias: row.project_alias ? String(row.project_alias) : undefined,
+    promptHash: String(row.prompt_hash),
+    startedAt: Number(row.started_at),
+    updatedAt: Number(row.updated_at),
+    expiresAt: Number(row.expires_at),
+    state: String(row.state) === "stopping" ? "stopping" : "active",
   };
 }
 

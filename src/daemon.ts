@@ -79,6 +79,8 @@ export async function startDaemon(): Promise<void> {
 
   const messageQueues = new Map<string, Promise<void>>();
   const activeInboundMessages = new Set<string>();
+  const inboundProcessingLeaseMs = config.codexTurnTimeoutMs > 0 ? config.codexTurnTimeoutMs + 60_000 : 24 * 60 * 60 * 1000;
+  const staleInboundProcessingBefore = () => Date.now() - inboundProcessingLeaseMs;
   const processWechatMessage = async (message: WechatMessage) => {
     const text = extractText(message);
     const senderId = message.from_user_id;
@@ -109,10 +111,9 @@ export async function startDaemon(): Promise<void> {
 
   const processInboundMessage = async (key: string) => {
     if (activeInboundMessages.has(key)) return;
-    const record = state.getInboundMessage(key);
+    const record = state.claimInboundMessage(key, staleInboundProcessingBefore());
     if (!record) return;
     activeInboundMessages.add(key);
-    state.markInboundProcessing(key);
     try {
       await processWechatMessage(record.message);
       state.markInboundProcessed(key);
@@ -142,6 +143,10 @@ export async function startDaemon(): Promise<void> {
       void processInboundMessage(key).catch((error) => warn(`immediate inbound message failed: ${errorText(error)}`));
       return;
     }
+    if (text && contextToken && state.getLatestActiveTurnForSender(senderId)) {
+      void processInboundMessage(key).catch((error) => warn(`active-turn inbound message failed: ${errorText(error)}`));
+      return;
+    }
     const previous = messageQueues.get(senderId) || Promise.resolve();
     const next = previous.catch(() => {}).then(() => processInboundMessage(key));
     messageQueues.set(senderId, next);
@@ -150,7 +155,7 @@ export async function startDaemon(): Promise<void> {
     });
   };
 
-  for (const record of state.pendingInboundMessages()) {
+  for (const record of state.claimableInboundMessages(100, staleInboundProcessingBefore())) {
     scheduleInboundMessage(record.key);
   }
 
@@ -178,7 +183,7 @@ async function retryUndeliveredNotices(
   const notices = state.pendingUndeliveredNotices(20);
   for (const notice of notices) {
     try {
-      await deliverNotice(state, config, account, notice);
+      await deliverNotice(state, config, account, notice, { redelivery: true });
     } catch (error) {
       warn(`failed to retry notice ${notice.id}: ${errorText(error)}`);
       if (isWechatContextTokenStaleError(error)) return;
@@ -191,7 +196,13 @@ function isImmediateApprovalMessage(text: string, senderId: string, message: Wec
   return /^\/(?:approve|deny|approvals)\b/i.test(trimmed) || (Boolean(classifyApprovalReply(trimmed)) && approvals.canResolveReply(senderId, message));
 }
 
-async function deliverNotice(state: StateStore, config: ReturnType<typeof loadConfig>, account: NonNullable<ReturnType<typeof loadAccount>>, notice: NoticeRecord): Promise<void> {
+async function deliverNotice(
+  state: StateStore,
+  config: ReturnType<typeof loadConfig>,
+  account: NonNullable<ReturnType<typeof loadAccount>>,
+  notice: NoticeRecord,
+  options: { redelivery?: boolean } = {},
+): Promise<void> {
   const owner = config.ownerSenderId || state.ownerSenderId();
   if (!owner) return;
   const chat = state.getChat(owner);
@@ -200,7 +211,7 @@ async function deliverNotice(state: StateStore, config: ReturnType<typeof loadCo
   const token = state.getContextToken(owner);
   if (!token) return;
   try {
-    const sent = await sendLongText(config, account, owner, formatNoticeSummary(notice), token, {
+    const sent = await sendLongText(config, account, owner, formatNoticeSummary(notice, options), token, {
       messageIdPrefix: `notice:${notice.id}`,
       continuationPrefix: formatNoticeContinuationPrefix(notice),
     });

@@ -57,6 +57,7 @@ describe("notice formatting", () => {
     };
 
     expect(formatNoticeSummary(notice)).toContain("WeChat-Codex项目（cebf35）已出话：");
+    expect(formatNoticeSummary(notice, { redelivery: true })).toContain("【补发】WeChat-Codex项目（cebf35）已出话：");
     expect(formatNoticeContinuationPrefix(notice)).toContain("WeChat-Codex项目（cebf35）");
   });
 });
@@ -70,7 +71,7 @@ describe("desktop live update notice", () => {
         liveDesktopUpdates: false,
         reason: "fallback",
       }),
-    ).toContain("Desktop 未接入共享 app-server");
+    ).toContain("微信追问/回复的内容，需要重开 Codex Desktop 才能刷新");
   });
 
   it("stays quiet when transport supports live Desktop updates", () => {
@@ -211,7 +212,7 @@ describe("referenced notification routing", () => {
       currentThread: "wrong-thread",
       lastNoticeId: notice.id,
     });
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ ret: 0 }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -252,6 +253,316 @@ describe("referenced notification routing", () => {
     expect(codex.resumeThread).toHaveBeenCalledWith("right-thread", "/Users/qqk/Documents/Wechat-Codex");
     expect(codex.runTurn).toHaveBeenCalledWith(expect.objectContaining({ threadId: "right-thread", cwd: "/Users/qqk/Documents/Wechat-Codex" }));
     expect(state.getChat("u@im.wechat").currentProject).toBe("WeChat-Codex");
+
+    state.close();
+    removeStateDbForTests(db);
+  });
+
+  it("uses plain 1 as a keepalive refresh without sending it to Codex", async () => {
+    const db = tempDb("router-keepalive-one");
+    removeStateDbForTests(db);
+    const state = new StateStore(db);
+    state.addAllowed("u@im.wechat", "tester", true);
+    const notice = state.createNotice({
+      sessionId: "right-thread",
+      threadId: "right-thread",
+      cwd: "/Users/qqk/Documents/Wechat-Codex",
+      projectAlias: "WeChat-Codex",
+      title: "done",
+      summary: "summary",
+      body: "body",
+      source: "hook",
+      createdAt: 1,
+    });
+    state.patchChat("u@im.wechat", { lastNoticeId: notice.id });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ret: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const codex = {
+      resumeThread: vi.fn(),
+      runTurn: vi.fn(),
+      transportStatus: () => ({ configuredMode: "auto", modeUsed: "spawn", liveDesktopUpdates: false, reason: "test" }),
+    } as unknown as RouterDeps["codex"];
+
+    await handleWechatText(
+      { config: defaultConfig(), account: testAccount(), state, codex },
+      {
+        senderId: "u@im.wechat",
+        contextToken: "ctx",
+        text: "1",
+        message: {
+          from_user_id: "u@im.wechat",
+          context_token: "ctx",
+          message_type: 1,
+          item_list: [{ type: 1, text_item: { text: "1" } }],
+        },
+      },
+    );
+
+    expect(codex.resumeThread).not.toHaveBeenCalled();
+    expect(codex.runTurn).not.toHaveBeenCalled();
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload.msg.item_list[0].text_item.text).toContain("已刷新微信通道");
+
+    state.close();
+    removeStateDbForTests(db);
+  });
+
+  it("still treats hi as regular text when the target thread is idle", async () => {
+    const db = tempDb("router-hi-regular");
+    removeStateDbForTests(db);
+    const state = new StateStore(db);
+    state.addAllowed("u@im.wechat", "tester", true);
+    const notice = state.createNotice({
+      sessionId: "right-thread",
+      threadId: "right-thread",
+      cwd: "/Users/qqk/Documents/Wechat-Codex",
+      projectAlias: "WeChat-Codex",
+      title: "done",
+      summary: "summary",
+      body: "body",
+      source: "hook",
+      createdAt: 1,
+    });
+    state.patchChat("u@im.wechat", { lastNoticeId: notice.id });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ret: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const codex = {
+      resumeThread: vi.fn(),
+      runTurn: vi.fn(async (params: { threadId: string; cwd?: string; onTurnId?: (turnId: string) => void }) => {
+        params.onTurnId?.("turn-hi");
+        return { threadId: params.threadId, turnId: "turn-hi", text: "hi 完成", deniedRequests: 0 };
+      }),
+      transportStatus: () => ({ configuredMode: "auto", modeUsed: "spawn", liveDesktopUpdates: false, reason: "test" }),
+    } as unknown as RouterDeps["codex"];
+    const config = {
+      ...defaultConfig(),
+      wechatProgress: { typingEnabled: false, typingKeepaliveMs: 5000, heartbeatAfterMs: 0 },
+      projects: [{ alias: "WeChat-Codex", path: "/Users/qqk/Documents/Wechat-Codex" }],
+    };
+
+    await handleWechatText(
+      { config, account: testAccount(), state, codex },
+      {
+        senderId: "u@im.wechat",
+        contextToken: "ctx",
+        text: "hi",
+        message: {
+          from_user_id: "u@im.wechat",
+          context_token: "ctx",
+          message_type: 1,
+          item_list: [{ type: 1, text_item: { text: "hi" } }],
+        },
+      },
+    );
+
+    expect(codex.resumeThread).toHaveBeenCalledWith("right-thread", "/Users/qqk/Documents/Wechat-Codex");
+    expect(codex.runTurn).toHaveBeenCalledWith(expect.objectContaining({ threadId: "right-thread", cwd: "/Users/qqk/Documents/Wechat-Codex" }));
+
+    state.close();
+    removeStateDbForTests(db);
+  });
+
+  it("does not send regular text to Codex while the sender has an active turn", async () => {
+    const db = tempDb("router-active-busy");
+    removeStateDbForTests(db);
+    const state = new StateStore(db);
+    state.addAllowed("u@im.wechat", "tester", true);
+    const notice = state.createNotice({
+      sessionId: "right-thread",
+      threadId: "right-thread",
+      cwd: "/Users/qqk/Documents/Wechat-Codex",
+      projectAlias: "WeChat-Codex",
+      title: "done",
+      summary: "summary",
+      body: "body",
+      source: "hook",
+      createdAt: 1,
+    });
+    state.patchChat("u@im.wechat", { lastNoticeId: notice.id });
+    state.tryAcquireActiveTurn({
+      threadId: "right-thread",
+      senderId: "u@im.wechat",
+      projectAlias: "WeChat-Codex",
+      prompt: "long task",
+      expiresAt: Date.now() + 60_000,
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ret: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const codex = {
+      resumeThread: vi.fn(),
+      runTurn: vi.fn(),
+      transportStatus: () => ({ configuredMode: "auto", modeUsed: "spawn", liveDesktopUpdates: false, reason: "test" }),
+    } as unknown as RouterDeps["codex"];
+
+    await handleWechatText(
+      { config: defaultConfig(), account: testAccount(), state, codex },
+      {
+        senderId: "u@im.wechat",
+        contextToken: "ctx",
+        text: "hi",
+        message: {
+          from_user_id: "u@im.wechat",
+          context_token: "ctx",
+          message_type: 1,
+          item_list: [{ type: 1, text_item: { text: "hi" } }],
+        },
+      },
+    );
+
+    expect(codex.resumeThread).not.toHaveBeenCalled();
+    expect(codex.runTurn).not.toHaveBeenCalled();
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload.msg.item_list[0].text_item.text).toContain("本条没有发送给 Codex");
+    expect(payload.msg.item_list[0].text_item.text).toContain("/stop");
+
+    state.close();
+    removeStateDbForTests(db);
+  });
+
+  it("stops the latest active turn for the sender", async () => {
+    const db = tempDb("router-stop");
+    removeStateDbForTests(db);
+    const state = new StateStore(db);
+    state.addAllowed("u@im.wechat", "tester", true);
+    state.tryAcquireActiveTurn({
+      threadId: "right-thread",
+      senderId: "u@im.wechat",
+      projectAlias: "WeChat-Codex",
+      prompt: "long task",
+      expiresAt: Date.now() + 60_000,
+    });
+    state.updateActiveTurnId("right-thread", "turn-1");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ret: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const codex = {
+      interruptTurn: vi.fn(async () => undefined),
+      transportStatus: () => ({ configuredMode: "auto", modeUsed: "spawn", liveDesktopUpdates: false, reason: "test" }),
+    } as unknown as RouterDeps["codex"];
+
+    await handleWechatText(
+      { config: defaultConfig(), account: testAccount(), state, codex },
+      {
+        senderId: "u@im.wechat",
+        contextToken: "ctx",
+        text: "/stop",
+        message: {
+          from_user_id: "u@im.wechat",
+          context_token: "ctx",
+          message_type: 1,
+          item_list: [{ type: 1, text_item: { text: "/stop" } }],
+        },
+      },
+    );
+
+    expect(codex.interruptTurn).toHaveBeenCalledWith("right-thread", "turn-1");
+    expect(state.getActiveTurn("right-thread")?.state).toBe("stopping");
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload.msg.item_list[0].text_item.text).toContain("已发送停止请求");
+
+    state.close();
+    removeStateDbForTests(db);
+  });
+
+  it("arms the next message for a new thread when /p alias /new is sent", async () => {
+    const db = tempDb("router-p-new");
+    removeStateDbForTests(db);
+    const state = new StateStore(db);
+    state.addAllowed("u@im.wechat", "tester", true);
+    const notice = state.createNotice({
+      sessionId: "wechat-thread",
+      threadId: "wechat-thread",
+      cwd: "/Users/qqk/Documents/Wechat-Codex",
+      projectAlias: "WeChat-Codex",
+      title: "done",
+      summary: "summary",
+      body: "body",
+      source: "hook",
+      createdAt: 1,
+    });
+    state.patchChat("u@im.wechat", {
+      currentProject: "WeChat-Codex",
+      lastNoticeId: notice.id,
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ ret: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const codex = {
+      startThread: vi.fn(async () => "cv-thread"),
+      resumeThread: vi.fn(),
+      runTurn: vi.fn(async (params: { threadId: string; cwd?: string; onTurnId?: (turnId: string) => void }) => {
+        params.onTurnId?.("turn-cv");
+        return { threadId: params.threadId, turnId: "turn-cv", text: "CV 完成", deniedRequests: 0 };
+      }),
+      transportStatus: () => ({ configuredMode: "auto", modeUsed: "spawn", liveDesktopUpdates: false, reason: "test" }),
+    } as unknown as RouterDeps["codex"];
+    const config = {
+      ...defaultConfig(),
+      wechatProgress: { typingEnabled: false, typingKeepaliveMs: 5000, heartbeatAfterMs: 0 },
+      projects: [
+        { alias: "cv", path: "/Users/qqk/Documents/My_Projects/CV" },
+        { alias: "WeChat-Codex", path: "/Users/qqk/Documents/Wechat-Codex" },
+      ],
+    };
+
+    await handleWechatText(
+      { config, account: testAccount(), state, codex },
+      {
+        senderId: "u@im.wechat",
+        contextToken: "ctx",
+        text: "/p cv /new",
+        message: {
+          from_user_id: "u@im.wechat",
+          context_token: "ctx",
+          message_type: 1,
+          item_list: [{ type: 1, text_item: { text: "/p cv /new" } }],
+        },
+      },
+    );
+
+    expect(codex.startThread).not.toHaveBeenCalled();
+    expect(state.getChat("u@im.wechat").currentProject).toBe("cv");
+    expect(state.getChat("u@im.wechat").pendingNewProject).toBe("cv");
+    expect(JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body)).msg.item_list[0].text_item.text).toContain("下一条消息会在项目 cv 中新建");
+
+    await handleWechatText(
+      { config, account: testAccount(), state, codex },
+      {
+        senderId: "u@im.wechat",
+        contextToken: "ctx",
+        text: "帮我更新简历",
+        message: {
+          from_user_id: "u@im.wechat",
+          context_token: "ctx",
+          message_type: 1,
+          item_list: [{ type: 1, text_item: { text: "帮我更新简历" } }],
+        },
+      },
+    );
+
+    expect(codex.startThread).toHaveBeenCalledWith("/Users/qqk/Documents/My_Projects/CV");
+    expect(codex.resumeThread).not.toHaveBeenCalled();
+    expect(codex.runTurn).toHaveBeenCalledWith(expect.objectContaining({ threadId: "cv-thread", cwd: "/Users/qqk/Documents/My_Projects/CV" }));
+    expect(state.getChat("u@im.wechat").currentProject).toBe("cv");
+    expect(state.getChat("u@im.wechat").pendingNewProject).toBeUndefined();
 
     state.close();
     removeStateDbForTests(db);
